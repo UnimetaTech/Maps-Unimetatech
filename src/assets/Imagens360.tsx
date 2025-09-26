@@ -1335,7 +1335,7 @@ export const imagens360: TImagen360[] = [
     ],
     links: [
       { target: 3, position: new THREE.Vector3(2, 0, 5) },
-      { target: 6, position: new THREE.Vector3(10, 1, 7) }, //Este es el target 7
+      { target: 6, position: new THREE.Vector3(10, 1, 7) }, 
     ],
   },
   {
@@ -1602,6 +1602,7 @@ export const imagens360: TImagen360[] = [
     ],
     links: [
       { target: 3, position: new THREE.Vector3(0, 0, 5) },
+      { target: 8, position: new THREE.Vector3(9, 0, 5) },
       { target: 4, position: new THREE.Vector3(-8, -0.2, 5) },
     ],
   },
@@ -1868,8 +1869,8 @@ export const imagens360: TImagen360[] = [
       "https://nginx.unimetatech.la/maps/unimeta-maps/imagen360/Entrada_Sala_Viroo-min/slice_7_15.webp",
     ],
     links: [
-      { target: 5, position: new THREE.Vector3(-0.5, 0, 5) },
-      { target: 6, position: new THREE.Vector3(1.5, 0, -5) },
+      { target: 4, position: new THREE.Vector3(-0.5, 0, 5) },
+      { target: 7, position: new THREE.Vector3(1.5, 0, -5) },
     ],
   },
   {

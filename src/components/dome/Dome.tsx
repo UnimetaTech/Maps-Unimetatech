@@ -1,16 +1,17 @@
-import { useMemo } from "react";
-import { Model } from "@/assets/Model";
-import { useZones } from "@/store/Zones";
 
-export const Dome = () => {
-  const { maps, currentIndex } = useZones();
+import React, { useMemo } from "react";
+import { useZones } from "@/store/Zones";
+import { Model } from "@/assets/Model";
+
+
+export const Dome: React.FC = () => {
+  const { currentImg360 } = useZones();
 
   const textures = useMemo(() => {
-    const textureSet = maps[currentIndex];
-    return textureSet?.high?.length 
-      ? textureSet.high 
-      : textureSet?.low || [];
-  }, [maps, currentIndex]);
+    if (!currentImg360) return [];
+    // @ts-ignore
+    return currentImg360.url || [];
+  }, [currentImg360]);
 
   return (
     <group>
@@ -18,3 +19,5 @@ export const Dome = () => {
     </group>
   );
 };
+
+export default Dome;
