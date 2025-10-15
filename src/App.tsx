@@ -1,35 +1,28 @@
+
 import React, { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useZones } from "@/store/Zones";
 import loadingGif from "@/assets/loadingGif.gif";
 
-const PortalsLazy = () =>
-  import("@/components/dome").then((m) => ({ default: m.Portals }));
+const PortalsLazy = () => import("@/components/dome").then((m) => ({ default: m.Portals }));
 const ViewMapsVrLazy = () => import("./layout/ViewMapsVr");
 
 const Portals = React.memo(React.lazy(PortalsLazy));
 const ViewMapsVr = React.lazy(ViewMapsVrLazy);
 
 function App() {
-  const { texturesReady, currentIndex, loadLowForIndex, startBackgroundPreload } = useZones();
+  const { texturesReady, preloadTextures } = useZones();
   const [showLoader, setShowLoader] = useState(true);
   const [lazyReady, setLazyReady] = useState(false);
 
   useEffect(() => {
     Promise.all([PortalsLazy(), ViewMapsVrLazy()])
       .then(() => setLazyReady(true))
-      .catch((err) => console.error("Error preloading lazy components", err));
+      .catch(console.error);
   }, []);
 
   useEffect(() => {
-    (async () => {
-      try {
-        await loadLowForIndex(currentIndex);
-        startBackgroundPreload({ low: 4, high: 2 });
-      } catch (e) {
-        console.error("Error during initial low load or starting background preload", e);
-      }
-    })();
+    preloadTextures().catch(console.error);
   }, []);
 
   useEffect(() => {
@@ -65,7 +58,7 @@ function App() {
             transition={{ duration: 0.8, ease: "easeInOut" }}
             className="w-screen h-screen"
           >
-            <React.Suspense fallback={null }>
+            <React.Suspense fallback={null}>
               <ViewMapsVr>
                 <Portals />
               </ViewMapsVr>

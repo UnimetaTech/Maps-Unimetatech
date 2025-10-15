@@ -3,18 +3,18 @@ import { create } from "zustand";
 import type { TImagen360 } from "@/components/dome";
 import { imagens360 } from "@/assets/Imagens360";
 
-// ---- Tipos ----
 type TextureSet = { low: THREE.Texture[]; high: THREE.Texture[] };
+export type TImagen360Extended = TImagen360 & { url?: THREE.Texture[] };
 
 type TStatesZones = {
   currentIndex: number;
-  currentImg360: TImagen360 | null;
+  currentImg360: TImagen360Extended | null;
   imagens360: TImagen360[];
   maps: Record<number, TextureSet>;
-  loadingHighMap: Record<number, boolean>;
   loadingLow: Record<number, boolean>;
+  loadingHighMap: Record<number, boolean>;
   priorityIndex: number | null;
-  backgroundStarted: boolean;
+  backgroundRunId?: number;
   texturesReady: boolean;
 };
 
@@ -24,46 +24,75 @@ type TActionZones = {
   priorityItem: (index: number) => Promise<void>;
   loadLowForIndex: (index: number, priority?: boolean) => Promise<void>;
   loadHighForIndex: (index: number, priority?: boolean) => Promise<void>;
-  startBackgroundPreload: (opts?: { low?: number; high?: number }) => void;
+  startBackgroundPreload: (opts?: { low?: number; high?: number; startIndex?: number }) => void;
 };
 
-// ---- Helpers ----
-const DEFAULT_HEADERS: HeadersInit = {
-  Accept: "image/webp,image/*,*/*;q=0.8",
-};
+const textureCache = new Map<string, Promise<THREE.Texture | undefined>>();
 
 async function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.crossOrigin = "anonymous";
-    img.src = url;
     img.onload = () => resolve(img);
-    img.onerror = reject;
+    img.onerror = () => reject(new Error("Error cargando imagen: " + url));
+    img.src = url;
   });
 }
 
-async function loadTexture(url: string): Promise<THREE.Texture> {
-  const res = await fetch(url, { headers: DEFAULT_HEADERS });
-  const blob = await res.blob();
-  const img = await loadImage(URL.createObjectURL(blob));
-  const texture = new THREE.Texture(img);
-  texture.needsUpdate = true;
-  texture.minFilter = THREE.LinearFilter;
-  texture.magFilter = THREE.LinearFilter;
-  return texture;
+function fetchTextureWithCache(url: string): Promise<THREE.Texture | undefined> {
+  if (textureCache.has(url)) return textureCache.get(url)!;
+
+  const p = (async () => {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) return undefined;
+      const blob = await res.blob();
+      const img = await loadImage(URL.createObjectURL(blob));
+      const tex = new THREE.Texture(img);
+      tex.needsUpdate = true;
+      tex.minFilter = THREE.LinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      return tex;
+    } catch {
+      return undefined;
+    }
+  })();
+
+  textureCache.set(url, p);
+  return p;
 }
 
-async function loadInChunks(urls: string[], chunkSize = 12): Promise<THREE.Texture[]> {
-  const result: THREE.Texture[] = [];
-  for (let i = 0; i < urls.length; i += chunkSize) {
-    const chunk = urls.slice(i, i + chunkSize);
-    const texs = await Promise.all(chunk.map(loadTexture));
-    result.push(...texs);
+async function loadInParallel(
+  urls: string[],
+  maxParallel = 6
+): Promise<THREE.Texture[]> {
+  const result: (THREE.Texture | undefined)[] = new Array(urls.length);
+  let current = 0;
+
+  async function worker() {
+    while (current < urls.length) {
+      const i = current++;
+      const tex = await fetchTextureWithCache(urls[i]);
+      result[i] = tex;
+    }
   }
-  return result;
+
+  const workers = Array.from({ length: Math.min(maxParallel, urls.length) }, worker);
+  await Promise.all(workers);
+  return result.filter(Boolean) as THREE.Texture[];
 }
 
-// ---- Store ----
+function isComplete(arr: (THREE.Texture | undefined)[] | undefined, expected: number) {
+  if (!arr || arr.length < expected) return false;
+  return arr.every(Boolean);
+}
+
+function getNextIndexes(startIndex: number, count: number, total: number) {
+  const arr: number[] = [];
+  for (let i = 1; i <= count; i++) arr.push((startIndex + i) % total);
+  return arr;
+}
+
 export const useZones = create<TStatesZones & TActionZones>()((set, get) => ({
   currentIndex: 0,
   currentImg360: null,
@@ -72,123 +101,108 @@ export const useZones = create<TStatesZones & TActionZones>()((set, get) => ({
   loadingLow: {},
   loadingHighMap: {},
   priorityIndex: null,
-  backgroundStarted: false,
+  backgroundRunId: undefined,
   texturesReady: false,
 
   changedImagen: async (index) => {
-    set({ currentIndex: index, priorityIndex: index });
-    await get().priorityItem(index);
+    const { maps, imagens360, priorityItem } = get();
+    if (!maps[index] || !isComplete(maps[index].low, imagens360[index].lowRes.length)) {
+      await priorityItem(index);
+    }
+    set((s) => {
+      const map = s.maps[index];
+      return {
+        currentIndex: index,
+        currentImg360: { ...s.imagens360[index], url: map?.low ?? [] },
+        texturesReady: true,
+      };
+    });
+    get().startBackgroundPreload({ startIndex: index, low: 2 });
   },
 
   preloadTextures: async () => {
-    for (let i = 0; i < get().imagens360.length; i++) {
-      if (!get().maps[i]?.low?.length) {
-        await get().loadLowForIndex(i);
-      }
-    }
-    set({ texturesReady: true });
+    const { currentIndex, priorityItem, startBackgroundPreload } = get();
+    await priorityItem(currentIndex);
+    startBackgroundPreload({ startIndex: currentIndex, low: 2 });
   },
 
   priorityItem: async (index) => {
-    await Promise.allSettled([
-      get().loadLowForIndex(index, true),
-      get().loadHighForIndex(index, true),
-    ]);
+    const { imagens360 } = get();
+    set({ priorityIndex: index, texturesReady: false });
+    await get().loadLowForIndex(index, true);
+    get().loadHighForIndex(index, true).catch(() => {});
 
-    const img = get().imagens360[index];
+    const img = imagens360[index];
     const map = get().maps[index];
     set({
-      currentImg360: {
-        ...img,
-        // @ts-ignore
-        url: map.high.length ? map.high : map.low,
-        links:
-          img.links?.map((l) => ({
-            ...l,
-            position: new THREE.Vector3(l.position.x, l.position.y, l.position.z),
-          })) || [],
-      },
+      currentImg360: { ...img, url: map?.high?.length ? map.high : map?.low },
       priorityIndex: null,
       texturesReady: true,
     });
+
+    get().startBackgroundPreload({ startIndex: index, low: 2 });
   },
 
   loadLowForIndex: async (index, priority = false) => {
-    const { imagens360, maps, loadingLow } = get();
-    if (maps[index]?.low?.length) return;
+    const { imagens360, maps } = get();
+    const urls = imagens360[index].lowRes;
+    if (maps[index] && isComplete(maps[index].low, urls.length)) return;
 
-    if (loadingLow[index]) return;
     set((s) => ({ loadingLow: { ...s.loadingLow, [index]: true } }));
 
     try {
-      const urls = imagens360[index].lowRes;
-      const chunkSize = priority ? 12 : 4; 
-      const textures = await loadInChunks(urls, chunkSize);
+      const texs = await loadInParallel(urls, priority ? 10 : 4);
       set((s) => ({
-        maps: { ...s.maps, [index]: { low: textures, high: s.maps[index]?.high || [] } },
-        loadingLow: { ...s.loadingLow, [index]: false },
-        texturesReady: true,
+        maps: { ...s.maps, [index]: { low: texs, high: s.maps[index]?.high ?? [] } },
       }));
-    } catch (err) {
-      console.error("[Zones] loadLowForIndex error", err);
+    } finally {
       set((s) => ({ loadingLow: { ...s.loadingLow, [index]: false } }));
     }
   },
 
   loadHighForIndex: async (index, priority = false) => {
-    const { imagens360, maps, loadingHighMap } = get();
-    if (maps[index]?.high?.length) return;
+    const { imagens360, maps } = get();
+    const urls = imagens360[index].highRes;
+    if (maps[index] && isComplete(maps[index].high, urls.length)) return;
 
-    if (loadingHighMap[index]) return;
     set((s) => ({ loadingHighMap: { ...s.loadingHighMap, [index]: true } }));
 
     try {
-      if (!maps[index]?.low?.length) await get().loadLowForIndex(index);
-      const urls = imagens360[index].highRes;
-      const chunkSize = priority ? 12 : 4;
-      const textures = await loadInChunks(urls, chunkSize);
-
+      const texs = await loadInParallel(urls, priority ? 8 : 3);
       set((s) => ({
-        maps: { ...s.maps, [index]: { low: s.maps[index].low, high: textures } },
-        loadingHighMap: { ...s.loadingHighMap, [index]: false },
-        texturesReady: true,
+        maps: { ...s.maps, [index]: { low: s.maps[index]?.low ?? [], high: texs } },
       }));
-    } catch (err) {
-      console.error("[Zones] loadHighForIndex error", err);
+    } finally {
       set((s) => ({ loadingHighMap: { ...s.loadingHighMap, [index]: false } }));
     }
   },
 
-  startBackgroundPreload: (opts = { low: 12, high: 4 }) => {
-    if (get().backgroundStarted) return;
-    set({ backgroundStarted: true });
+  startBackgroundPreload: (opts = { low: 2, high: 0, startIndex: undefined }) => {
+    const runId = Date.now();
+    const { imagens360 } = get();
+    const total = imagens360.length;
+    const lowCount = opts.low ?? 2;
+    const highCount = opts.high ?? 0;
+    const startIndex = typeof opts.startIndex === "number" ? opts.startIndex : get().currentIndex;
+
+    set({ backgroundRunId: runId });
 
     (async () => {
-      const total = get().imagens360.length;
+      const lowIndexes = getNextIndexes(startIndex, lowCount, total);
+      await Promise.all(
+        lowIndexes.map((idx) => get().loadLowForIndex(idx).catch(() => {}))
+      );
 
-      const tasks: number[] = Array.from({ length: total }, (_, i) => i);
+      if (highCount > 0) {
+        const highIndexes = lowIndexes.slice(0, highCount);
+        await Promise.all(
+          highIndexes.map((idx) => get().loadHighForIndex(idx).catch(() => {}))
+        );
+      }
 
-      const worker = async () => {
-        while (tasks.length > 0) {
-          const p = get().priorityIndex;
-          const index = p !== null ? p : tasks.shift();
-          if (index === undefined) return;
-
-          await Promise.allSettled([
-            get().loadLowForIndex(index),
-            get().loadHighForIndex(index),
-          ]);
-
-          if (p !== null) set({ priorityIndex: null });
-        }
-      };
-
-      const workerCount = opts?.low ?? 4;
-      const workers = Array.from({ length: workerCount }, () => worker());
-      await Promise.allSettled(workers);
-
-      set({ texturesReady: true });
+      if (get().backgroundRunId === runId) {
+        set({ backgroundRunId: undefined, texturesReady: true });
+      }
     })();
   },
-
 }));
