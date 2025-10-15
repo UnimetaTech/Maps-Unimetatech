@@ -8,19 +8,12 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      "framer-motion": path.resolve(__dirname, "node_modules/framer-motion/dist/framer-motion.mjs")
     },
   },
-  server: {
-    allowedHosts: true,
-  },
-
-  optimizeDeps: {
-    include: ["framer-motion"],
-  },
-  ssr: {
-    noExternal: ["framer-motion"],
-  },
-
+  server: { allowedHosts: true },
+  optimizeDeps: { include: ["framer-motion"] },
+  ssr: { noExternal: ["framer-motion"] },
   build: {
     rollupOptions: {
       output: {
