@@ -275,7 +275,6 @@ const TransitionMaterial = shaderMaterial(
     uProgress: 0,
     uStrength: 0 
   },
-  // Vertex Shader
   `
   varying vec2 vUv;
   varying vec3 vPosition;
@@ -286,7 +285,6 @@ const TransitionMaterial = shaderMaterial(
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }
   `,
-  // Fragment Shader
   `
   varying vec2 vUv;
   uniform sampler2D uTextureCurrent;
@@ -312,7 +310,6 @@ const TransitionMaterial = shaderMaterial(
     return fract(sin(dot(gl_FragCoord.xyz + seed, scale)) * 43758.5453 + seed);
   }
 
-  // Función que mezcla las texturas en función del factor "dissolve"
   vec3 crossFade(vec2 uv, float dissolve) {
     return mix(texture(uTextureCurrent, uv).rgb, texture(uTextureNext, uv).rgb, dissolve);
   }
@@ -321,11 +318,9 @@ const TransitionMaterial = shaderMaterial(
     vec2 texCoord = vUv;
     float progress = uProgress;
     
-    // Se mueve el centro a lo largo del eje X según la transición
     vec2 center = vec2(Linear_ease(0.5, 0.0, 1.0, progress), 0.5);
     float dissolve = Exponential_easeInOut(0.0, 1.0, 1.0, progress);
     
-    // Aplica blur durante la transición: a inicio tiene uStrength y se disipa al finalizar
     float strength = mix(uStrength, 0.0, progress);
 
     vec3 color = vec3(0.0);
@@ -334,7 +329,6 @@ const TransitionMaterial = shaderMaterial(
 
     float offset = random(vec3(12.9898, 78.233, 151.7182), 0.0) * 0.5;
 
-    // Se realizan 20 muestras para generar un efecto de desenfoque
     for (int t = 0; t < 20; t++) {
       float t_f = float(t);
       float percent = (t_f + offset) / 20.0;
@@ -365,46 +359,66 @@ interface TransitionMaterialProps extends THREE.ShaderMaterial {
 
 type ModelProps = {
   textures: THREE.Texture[];
+  zoneIndex: number;
+  transitionTick?: number;
+  transitionSourceIndex?: number;
 } & JSX.IntrinsicElements["group"];
 
-export function Model({ textures, ...props }: ModelProps) {
+export function Model({ textures, zoneIndex, transitionTick, transitionSourceIndex, ...props }: ModelProps) {
   const { nodes, materials } = useGLTF("/Sphere-transformed.glb") as GLTFResult;
   const materialsRef = useRef<Record<string, TransitionMaterialProps>>({});
+  const lastTransitionRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     Object.entries(materials).forEach(([name, mat]) => {
       const material = new TransitionMaterial() as TransitionMaterialProps;
-      // Copiamos propiedades importantes del material original
       material.transparent = mat.transparent;
       material.side = mat.side;
-      material.uTextureCurrent = mat.map;
-      material.uTextureNext = mat.map;
+      material.uTextureCurrent = mat.map ?? null;
+      material.uTextureNext = mat.map ?? null;
       material.uProgress = 1.0;
       materialsRef.current[name] = material;
     });
+    return () => {
+      Object.values(materialsRef.current).forEach((m) => {
+        try { m.dispose && m.dispose(); } catch {}
+      });
+    };
   }, [materials]);
 
   useEffect(() => {
+    const transitionRequested = lastTransitionRef.current !== transitionTick;
+    const isForThisZone = typeof transitionSourceIndex === "number" && transitionSourceIndex === zoneIndex;
+    const shouldTrigger = transitionRequested && isForThisZone;
+
     textures.forEach((texture, index) => {
-      if (texture) {
-        texture.flipY = false;
-        texture.needsUpdate = true;
-  
-        const vertical = Math.floor(index / 16);
-        const horizontal = index % 16;
-        const name = `Material_${vertical}_${horizontal}`;
-        const mat = materialsRef.current[name];
-        if (mat) {
-          mat.uTextureNext = texture;
-          mat.uProgress = 0;
-          mat.needsUpdate = true;
+      if (!texture) return;
+      texture.flipY = false;
+      texture.needsUpdate = true;
+
+      const vertical = Math.floor(index / 16);
+      const horizontal = index % 16;
+      const name = `Material_${vertical}_${horizontal}`;
+      const mat = materialsRef.current[name];
+      if (!mat) return;
+
+      mat.uTextureNext = texture;
+
+      if (shouldTrigger) {
+        mat.uProgress = 0;
+      } else {
+        if (mat.uProgress >= 1.0) {
+          mat.uTextureCurrent = texture;
         }
       }
+      mat.needsUpdate = true;
     });
-  }, [textures]);
+
+    lastTransitionRef.current = transitionTick;
+  }, [textures, transitionTick, transitionSourceIndex, zoneIndex]);
 
   useFrame((_, delta) => {
-    Object.values(materialsRef.current).forEach(mat => {
+    Object.values(materialsRef.current).forEach((mat) => {
       if (mat.uProgress < 1.0) {
         mat.uProgress = Math.min(mat.uProgress + delta * 0.8, 1.0);
         if (mat.uProgress >= 1.0) {
