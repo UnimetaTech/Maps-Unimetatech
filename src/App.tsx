@@ -11,7 +11,7 @@ const ViewMapsVr = React.lazy(ViewMapsVrLazy);
 const FADE_MS = 800;
 
 function App(): JSX.Element {
-  const { texturesReady, preloadTextures } = useZones();
+  const { texturesReady, preloadTextures, firstShowDone, priorityItem } = useZones();
   const [showLoader, setShowLoader] = useState<boolean>(true);
   const [lazyReady, setLazyReady] = useState<boolean>(false);
   const [sceneVisible, setSceneVisible] = useState<boolean>(false);
@@ -23,11 +23,15 @@ function App(): JSX.Element {
   }, []);
 
   useEffect(() => {
+    priorityItem(0).catch(console.error);
     preloadTextures().catch(console.error);
   }, []);
 
   useEffect(() => {
-    if (texturesReady && lazyReady) {
+    const primeraLista = firstShowDone?.[0] === true;
+    const readyToShow = lazyReady && (texturesReady || primeraLista);
+
+    if (readyToShow) {
       setShowLoader(false);
 
       const t = setTimeout(() => {
@@ -36,7 +40,7 @@ function App(): JSX.Element {
 
       return () => clearTimeout(t);
     }
-  }, [texturesReady, lazyReady]);
+  }, [texturesReady, lazyReady, firstShowDone]);
 
   return (
     <section className="w-screen h-screen overflow-hidden bg-white relative">
